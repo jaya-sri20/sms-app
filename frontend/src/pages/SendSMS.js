@@ -23,6 +23,11 @@ export default function SendSMS() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showRawJson, setShowRawJson] = useState(false);
+  // Determine API base: use localhost in development/debug, otherwise use REACT_APP_API_URL
+  const API_BASE =
+    process.env.NODE_ENV === 'development'
+      ? 'http://localhost:4000'
+      : process.env.REACT_APP_API_URL || '';
   // normalize and validate phone numbers; defaultCountry should be in '+1' form
   function normalizeAndValidate(csv, defaultCountry = '+1') {
     const tokens = csv.split(',').map((s) => s.trim()).filter(Boolean);
@@ -149,7 +154,7 @@ export default function SendSMS() {
     let clientSideRejects = [...(clientSideInvalid || []), ...duplicates];
 
     try {
-      const res = await fetch('http://localhost:4000/api/send-sms', {
+      const res = await fetch(`${API_BASE}/api/send-sms`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -161,12 +166,16 @@ export default function SendSMS() {
       const data = await res.json();
 
       if (!res.ok) {
-        setError(data.error || 'Failed to send messages');
-      } else {
-        const combined = Array.isArray(data.results) ? data.results.slice() : [];
-        if (clientSideRejects.length > 0) combined.push(...clientSideRejects);
-        setResult({ results: combined });
+        // Handle 400, 207, etc.
+        setError(data.error || `Failed to send messages (${data.failedCount || 'all'} failed)`);
+      } else if (data.failedCount && data.failedCount > 0) {
+        // Handle 200 with some failures
+        setError(`${data.failedCount} message(s) failed to send. See details below.`);
       }
+
+      const combined = Array.isArray(data.results) ? data.results.slice() : [];
+      if (clientSideRejects.length > 0) combined.push(...clientSideRejects);
+      setResult({ results: combined });
     } catch (err) {
       setError('Network or server error');
       if (clientSideRejects.length > 0) setResult({ results: clientSideRejects });
