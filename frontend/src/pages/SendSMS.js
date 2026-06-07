@@ -166,12 +166,16 @@ export default function SendSMS() {
       const data = await res.json();
 
       if (!res.ok) {
-        setError(data.error || 'Failed to send messages');
-      } else {
-        const combined = Array.isArray(data.results) ? data.results.slice() : [];
-        if (clientSideRejects.length > 0) combined.push(...clientSideRejects);
-        setResult({ results: combined });
+        // Handle 400, 207, etc.
+        setError(data.error || `Failed to send messages (${data.failedCount || 'all'} failed)`);
+      } else if (data.failedCount && data.failedCount > 0) {
+        // Handle 200 with some failures
+        setError(`${data.failedCount} message(s) failed to send. See details below.`);
       }
+
+      const combined = Array.isArray(data.results) ? data.results.slice() : [];
+      if (clientSideRejects.length > 0) combined.push(...clientSideRejects);
+      setResult({ results: combined });
     } catch (err) {
       setError('Network or server error');
       if (clientSideRejects.length > 0) setResult({ results: clientSideRejects });

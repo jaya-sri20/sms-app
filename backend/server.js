@@ -80,13 +80,49 @@ app.post('/api/send-sms', async (req, res) => {
         from: process.env.TWILIO_FROM_NUMBER,
         to,
       });
-      results.push({ to, status: 'sent', sid: msg.sid });
+
+      // Check message status after a short delay to catch validation errors
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      try {
+        const status = await twilioClient.messages(msg.sid).fetch();
+        if (
+          status.errorCode &&
+          status.errorCode !== null &&
+          status.errorCode !== undefined
+        ) {
+          results.push({
+            to,
+            status: 'failed',
+            error: `Twilio Error ${status.errorCode}: ${status.errorMessage || 'Unknown error'}`,
+            sid: msg.sid,
+          });
+        } else {
+          results.push({ to, status: 'sent', sid: msg.sid });
+        }
+      } catch (statusErr) {
+        // If we can't fetch status, assume it was sent
+        results.push({ to, status: 'sent', sid: msg.sid });
+      }
     } catch (err) {
       results.push({ to, status: 'failed', error: err.message });
     }
   }
 
-  res.json({ success: true, results });
+  // Check if all messages failed
+  const failedCount = results.filter((r) => r.status === 'failed').length;
+  const successCount = results.filter((r) => r.status === 'sent').length;
+
+  // Return 400 if all failed, 207 if partial, 200 if all succeeded
+  const statusCode =
+    failedCount === results.length ? 400 : successCount === results.length ? 200 : 207;
+
+  res.status(statusCode).json({
+    success: successCount > 0,
+    successCount,
+    failedCount,
+    results,
+  });
 });
 
 const PORT = Number(process.env.PORT) || 4000;
