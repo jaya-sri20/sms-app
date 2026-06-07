@@ -66,6 +66,28 @@ app.post('/api/send-sms', async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 
+  const fromNumber = process.env.TWILIO_FROM_NUMBER;
+  if (!fromNumber) {
+    return res.status(500).json({ error: 'TWILIO_FROM_NUMBER not configured' });
+  }
+
+  // Verify the from number is valid and active
+  try {
+    const phoneNumber = await twilioClient.incomingPhoneNumbers.list({
+      phoneNumber: fromNumber,
+      limit: 1,
+    });
+
+    if (phoneNumber.length === 0) {
+      return res.status(400).json({
+        error: `Sender number ${fromNumber} is not registered in your Twilio account. Please verify it in Twilio Console.`,
+      });
+    }
+  } catch (err) {
+    console.warn('Could not verify phone number:', err.message);
+    // Continue anyway, let Twilio catch the error
+  }
+
   const numbers = phoneNumbers
     .split(',')
     .map((n) => n.trim())
@@ -77,15 +99,26 @@ app.post('/api/send-sms', async (req, res) => {
     try {
       const msg = await twilioClient.messages.create({
         body: message,
-        from: process.env.TWILIO_FROM_NUMBER,
+        from: fromNumber,
         to,
       });
 
-      // Check message status after a short delay to catch validation errors
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      console.log(`Message created for ${to}: SID=${msg.sid}`);
+
+      // Check message status after a delay to catch validation errors
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
       try {
         const status = await twilioClient.messages(msg.sid).fetch();
+        console.log(`Message status for ${to}:`, {
+          sid: status.sid,
+          status: status.status,
+          errorCode: status.errorCode,
+          errorMessage: status.errorMessage,
+          priceUnit: status.priceUnit,
+          accountSid: status.accountSid,
+        });
+
         if (
           status.errorCode &&
           status.errorCode !== null &&
@@ -97,14 +130,23 @@ app.post('/api/send-sms', async (req, res) => {
             error: `Twilio Error ${status.errorCode}: ${status.errorMessage || 'Unknown error'}`,
             sid: msg.sid,
           });
+        } else if (status.status === 'failed' || status.status === 'undelivered') {
+          results.push({
+            to,
+            status: 'failed',
+            error: `Message delivery failed (Status: ${status.status})`,
+            sid: msg.sid,
+          });
         } else {
           results.push({ to, status: 'sent', sid: msg.sid });
         }
       } catch (statusErr) {
+        console.error(`Error fetching status for ${to}:`, statusErr.message);
         // If we can't fetch status, assume it was sent
         results.push({ to, status: 'sent', sid: msg.sid });
       }
     } catch (err) {
+      console.error(`Error creating message for ${to}:`, err.message);
       results.push({ to, status: 'failed', error: err.message });
     }
   }
